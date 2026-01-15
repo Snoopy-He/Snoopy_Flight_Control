@@ -42,7 +42,7 @@ end
 
 local Yaw_Angle,Pitch_Angle,Roll_Angle = 0,0,0
 local alt_pos = {
-    kp = 0.2,
+    kp = 1.5,
     ki = 0,
     kd = 0,
     error = 0,
@@ -53,7 +53,7 @@ local alt_pos = {
 }
 
 local alt_spd = {
-    kp = 0.1,
+    kp = 0.05,
     ki = 0,
     kd = 0.01,
     error = 0,
@@ -75,9 +75,9 @@ local yaw_ang = {
 }
 
 local yaw_rat = {
-    kp = 1.0,
+    kp = 0.1,
     ki = 0.00,
-    kd = 0.01,
+    kd = 0.001,
     error = 0,
     err_all = 0,
     last_err = 0,
@@ -108,7 +108,7 @@ local spd = {
 }
 
 local att_ang = {
-    kp = 0.2,
+    kp = 0.7,
     ki = 0.0,
     kd = 0,
     error = 0,
@@ -119,9 +119,9 @@ local att_ang = {
 }
 
 local att_rat = {
-    kp = 0.1,
+    kp = 0.02,
     ki = 0,
-    kd = 0.05,
+    kd = 0,
     error = 0,
     err_all = 0,
     last_err = 0,
@@ -197,17 +197,59 @@ function TF_R(angle,x,z)
     return math.sin(angle) * x - math.cos(angle) * z
 end
 
+function WorldToBody(world, matrix)
+    local Rinv = {
+        {matrix[1][1], matrix[2][1], matrix[3][1]},
+        {matrix[1][2], matrix[2][2], matrix[3][2]},
+        {matrix[1][3], matrix[2][3], matrix[3][3]}
+    }
+    return {
+        x = world.x * Rinv[1][1] + world.y * Rinv[1][2] + world.z * Rinv[1][3],
+        y = world.x * Rinv[2][1] + world.y * Rinv[2][2] + world.z * Rinv[2][3],
+        z = world.x * Rinv[3][1] + world.y * Rinv[3][2] + world.z * Rinv[3][3]
+    }
+end
+
+function true_data_fliter(value,old_value)
+    local x,y,z = value.x, value.y, value.z
+
+    if old_value.x == nil then
+        old_value.x = x
+        old_value.y = y
+        old_value.z = z
+    end
+    if math.abs(x - old_value.x) > 1 then
+        x = old_value.x
+    end
+    if math.abs(y - old_value.y) > 1 then
+        y = old_value.y
+    end
+    if math.abs(z - old_value.z) > 1 then
+        z = old_value.z
+    end
+
+    old_value.x = x
+    old_value.y = y
+    old_value.z = z
+    return {
+        x=x,
+        y=y,
+        z=z
+    }
+end
 
 local Pos_X = -332
 local Pos_Y = 100
 local Pos_Z = 77
+local old_omega = {}
 while true do
     Self_Check()
+    local matrix = ship.getTransformationMatrix()
     local yaw_Angle = ship.getYaw()
     local pitch_Angle = math.rad_reverse(ship.getPitch(),p_re)
     local roll_Angle = math.rad_reverse(ship.getRoll(),r_re)
     local pos = ship.getWorldspacePosition()
-    local omega = ship.getOmega()
+    local omega = true_data_fliter(WorldToBody(ship.getOmega(), matrix),old_omega)
     local mass = ship.getMass()
     local vel = ship.getVelocity()
     local px = PID_Calc(Pos_X,pos.x,pos_p)
@@ -216,16 +258,23 @@ while true do
     local pr = TF_R(yaw_Angle,px,pz)
     local vp = TF_P(yaw_Angle,vel.x,vel.z)
     local vr = TF_R(yaw_Angle,vel.x,vel.z)
-    local loit = normalize(math.sqrt(mass/1.41/pro_n),0,256)    
-    alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd)
-    pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)
-    rol = PID_Calc(PID_Calc(PID_Calc(pp,vr,spd),roll_Angle,att_ang),omega.z,att_rat)
-    M1 = alt - pit - rol - yaw + loit   --  - rol
+    local loit = normalize(math.sqrt(mass/1.41/pro_n/(math.cos(math.acos(math.cos(pitch_Angle)*math.cos(roll_Angle))))),0,256)    
+    alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y*0.01
+    --pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01
+    --rol = PID_Calc(PID_Calc(PID_Calc(pp,vr,spd),roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
+    --yaw = PID_Calc(PID_Calc(0,yaw_Angle,yaw_ang),omega.y,yaw_rat)
+    pit = PID_Calc(PID_Calc(0,pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01  --线性阻力模拟
+    rol = PID_Calc(PID_Calc(0,roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
+    M1 = alt - pit - rol - yaw + loit
     M2 = alt + pit + rol - yaw + loit
     M3 = alt - pit + rol + yaw + loit
     M4 = alt + pit - rol + yaw + loit
+    --M1 = loit - 0.3 - 0.3
+    --M2 = loit - 0.3 - 0.3
+    --M3 = loit + 0.3 - 0.3
+    --M4 = loit + 0.3 - 0.3
     --M1,M2,M3,M4 = 0,0,0,0
-    print(pr)
+    print(yaw_Angle)
 
     Motor_Set()
 end
