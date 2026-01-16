@@ -17,23 +17,23 @@ function math.clamp(value,min,max)
     return value
 end
 
-local trottle = -100
 local M1,M2,M3,M4 = 0,0,0,0
 
 function Motor1_Set()
-    Motor1.setTargetSpeed(math.floor(-denormalize(M1,0,256)))
+    --print(math.floor(-denormalize(M1,0,2048)),-denormalize(M1,0,2048),M1)
+    Motor1.setTargetSpeed(math.floor(-denormalize(M1,0,2048)))
 end
 
 function Motor2_Set()
-    Motor2.setTargetSpeed(math.floor(denormalize(M2,0,256)))
+    Motor2.setTargetSpeed(math.floor(denormalize(M2,0,2048)))
 end
 
 function Motor3_Set()
-    Motor3.setTargetSpeed(math.floor(-denormalize(M3,0,256)))
+    Motor3.setTargetSpeed(math.floor(-denormalize(M3,0,2048)))
 end
 
 function Motor4_Set()
-    Motor4.setTargetSpeed(math.floor(denormalize(M4,0,256)))
+    Motor4.setTargetSpeed(math.floor(denormalize(M4,0,2048)))
 end
 
 function Motor_Set()
@@ -49,7 +49,7 @@ local alt_pos = {
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 1000
+    output_max = 1000
 }
 
 local alt_spd = {
@@ -60,29 +60,29 @@ local alt_spd = {
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 256
+    output_max = 256
 }
 
 local yaw_ang = {
-    kp = 0.1,
+    kp = 0.5,
     ki = 0,
     kd = 0,
     error = 0,
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 256
+    output_max = 256
 }
 
 local yaw_rat = {
-    kp = 0.1,
+    kp = 0.5,
     ki = 0.00,
     kd = 0.001,
     error = 0,
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 256
+    output_max = 256
 }
 
 local pos_p = {
@@ -93,7 +93,7 @@ local pos_p = {
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 10
+    output_max = 10
 }
 
 local spd = {
@@ -104,29 +104,29 @@ local spd = {
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 45
+    output_max = 45
 }
 
 local att_ang = {
-    kp = 0.7,
+    kp = 1.0,
     ki = 0.0,
     kd = 0,
     error = 0,
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 256
+    output_max = 256
 }
 
 local att_rat = {
-    kp = 0.02,
+    kp = 0.5,
     ki = 0,
     kd = 0,
     error = 0,
     err_all = 0,
     last_err = 0,
     errall_max = 10000,
-    speed_max = 256
+    output_max = 1
 }
 
 function normalize(value,min,max)
@@ -140,12 +140,13 @@ function normalize(value,min,max)
 end
 
 function denormalize(value,min,max)
-    if value < 0  and value > -1 then
-        value = (-max-min)*value
+    if value > 1 then
+        value = 1
     elseif value < -1 then
-        value = -max-min
-    elseif value > 1 then
-        value = max-min
+        value = -1
+    end
+    if value < 0 then
+        value = (max - min)*(-value)
     else 
         value = (max-min)*value
     end
@@ -157,7 +158,7 @@ function PID_Calc(target,current,para)
     para.err_all = math.clamp(para.err_all + para.error,-para.errall_max,para.errall_max)
     local result = para.error * para.kp + para.err_all * para.ki + (para.error - para.last_err) * para.kd
     para.last_err = para.error
-    result = math.clamp(result,-para.speed_max,para.speed_max)
+    result = math.clamp(result,-para.output_max,para.output_max)
     return result
 end
 
@@ -238,16 +239,57 @@ function true_data_fliter(value,old_value)
     }
 end
 
+function quaternionToEuler(quat)
+    local x, y, z, w = quat.x, quat.y, quat.z, quat.w
+
+    local sinr_cosp = 2 * (w * x + y * z)
+    local cosr_cosp = 1 - 2 * (x * x + y * y)
+    local roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    local sinp = 2 * (w * y - z * x)
+    local pitch
+    if math.abs(sinp) >= 1 then
+        -- 当输入接近 ±1 时，asin 会不可区分，clamp 在 ±π/2
+        pitch = math.pi/2 * (sinp < 0 and -1 or 1)
+    else
+        pitch = math.asin(sinp)
+    end
+
+    local siny_cosp = 2 * (w * z + x * y)
+    local cosy_cosp = 1 - 2 * (y * y + z * z)
+    local yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return { roll = roll, pitch = pitch, yaw = yaw }
+end
+
+function angle_correct(angle,offset)
+    local corrected_angle = angle + offset
+    if corrected_angle > pi then
+        corrected_angle = corrected_angle - 2 * pi
+    elseif corrected_angle < -pi then
+        corrected_angle = corrected_angle + 2 * pi
+    end
+    return corrected_angle
+end
+
+function euler_correct(euler,offset_r,offset_p,offset_y)
+    return {
+        roll = angle_correct(euler.roll, offset_r),
+        pitch = -angle_correct(euler.yaw, offset_p),
+        yaw = angle_correct(euler.pitch, offset_y),
+    }
+end
+
 local Pos_X = -332
-local Pos_Y = 100
+local Pos_Y = -50
 local Pos_Z = 77
 local old_omega = {}
 while true do
-    Self_Check()
+    --Self_Check()
     local matrix = ship.getTransformationMatrix()
     local yaw_Angle = ship.getYaw()
-    local pitch_Angle = math.rad_reverse(ship.getPitch(),p_re)
-    local roll_Angle = math.rad_reverse(ship.getRoll(),r_re)
+    local pitch_Angle = ship.getPitch()
+    local roll_Angle = ship.getRoll()
     local pos = ship.getWorldspacePosition()
     local omega = true_data_fliter(WorldToBody(ship.getOmega(), matrix),old_omega)
     local mass = ship.getMass()
@@ -258,23 +300,23 @@ while true do
     local pr = TF_R(yaw_Angle,px,pz)
     local vp = TF_P(yaw_Angle,vel.x,vel.z)
     local vr = TF_R(yaw_Angle,vel.x,vel.z)
-    local loit = normalize(math.sqrt(mass/1.41/pro_n/(math.cos(math.acos(math.cos(pitch_Angle)*math.cos(roll_Angle))))),0,256)    
+    local euler = euler_correct(quaternionToEuler(ship.getQuaternion()),0,0,0)
+    local loit = normalize(math.sqrt(mass/0.1/pro_n),0,2048)    
     alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y*0.01
     --pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01
     --rol = PID_Calc(PID_Calc(PID_Calc(pp,vr,spd),roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
-    --yaw = PID_Calc(PID_Calc(0,yaw_Angle,yaw_ang),omega.y,yaw_rat)
+    yaw = PID_Calc(PID_Calc(0,yaw_Angle,yaw_ang),omega.y,yaw_rat)
     pit = PID_Calc(PID_Calc(0,pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01  --线性阻力模拟
     rol = PID_Calc(PID_Calc(0,roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
-    M1 = alt - pit - rol - yaw + loit
-    M2 = alt + pit + rol - yaw + loit
-    M3 = alt - pit + rol + yaw + loit
-    M4 = alt + pit - rol + yaw + loit
-    --M1 = loit - 0.3 - 0.3
-    --M2 = loit - 0.3 - 0.3
-    --M3 = loit + 0.3 - 0.3
-    --M4 = loit + 0.3 - 0.3
-    --M1,M2,M3,M4 = 0,0,0,0
-    print(yaw_Angle)
+    M1 = alt - pit - rol + yaw + loit
+    M2 = alt + pit + rol + yaw + loit
+    M3 = alt - pit + rol - yaw + loit
+    M4 = alt + pit - rol - yaw + loit
+
+    --print(rot.x, rot.y, rot.z, rot.w)
+    --M1,M2,M3,M4 = 0,0.0,0.0,0.1
+    --print(pit)
+    print(euler.roll, euler.pitch)
 
     Motor_Set()
 end
