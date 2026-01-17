@@ -64,7 +64,7 @@ local alt_spd = {
 }
 
 local yaw_ang = {
-    kp = 0.5,
+    kp = 0.05,
     ki = 0,
     kd = 0,
     error = 0,
@@ -75,7 +75,7 @@ local yaw_ang = {
 }
 
 local yaw_rat = {
-    kp = 0.5,
+    kp = 0.05,
     ki = 0.00,
     kd = 0.001,
     error = 0,
@@ -108,7 +108,7 @@ local spd = {
 }
 
 local att_ang = {
-    kp = 1.0,
+    kp = 0.5,
     ki = 0.0,
     kd = 0,
     error = 0,
@@ -119,9 +119,9 @@ local att_ang = {
 }
 
 local att_rat = {
-    kp = 0.5,
+    kp = 0.02,
     ki = 0,
-    kd = 0,
+    kd = 0.1,
     error = 0,
     err_all = 0,
     last_err = 0,
@@ -146,7 +146,7 @@ function denormalize(value,min,max)
         value = -1
     end
     if value < 0 then
-        value = (max - min)*(-value)
+        value = (max - min)*(value)
     else 
         value = (max-min)*value
     end
@@ -155,6 +155,15 @@ end
 
 function PID_Calc(target,current,para)
     para.error = target-current
+    para.err_all = math.clamp(para.err_all + para.error,-para.errall_max,para.errall_max)
+    local result = para.error * para.kp + para.err_all * para.ki + (para.error - para.last_err) * para.kd
+    para.last_err = para.error
+    result = math.clamp(result,-para.output_max,para.output_max)
+    return result
+end
+
+function PID_Calc_error(error,para)
+    para.error = error
     para.err_all = math.clamp(para.err_all + para.error,-para.errall_max,para.errall_max)
     local result = para.error * para.kp + para.err_all * para.ki + (para.error - para.last_err) * para.kd
     para.last_err = para.error
@@ -239,26 +248,120 @@ function true_data_fliter(value,old_value)
     }
 end
 
-function quaternionToEuler(quat)
-    local x, y, z, w = quat.x, quat.y, quat.z, quat.w
+function quaternionMultiply(q1, q2)
+    -- q = q1 × q2
+    -- 注意：四元数乘法不满足交换律
+    
+    return {
+        w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z,
+        x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
+        y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x,
+        z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w
+    }
+end
 
-    local sinr_cosp = 2 * (w * x + y * z)
-    local cosr_cosp = 1 - 2 * (x * x + y * y)
-    local roll = math.atan2(sinr_cosp, cosr_cosp)
+function rotateQuaternionAboutAxis(q_original, axis, angle)
+    -- 创建旋转四元数
+    local half_angle = angle * 0.5
+    local sin_half = math.sin(half_angle)
+    
+    local q_rotate = {
+        w = math.cos(half_angle),
+        x = axis.x * sin_half,
+        y = axis.y * sin_half,
+        z = axis.z * sin_half
+    }
+    
+    -- 左乘：新的 = 旋转 × 原始
+    return quaternionMultiply(q_rotate, q_original)
 
-    local sinp = 2 * (w * y - z * x)
-    local pitch
-    if math.abs(sinp) >= 1 then
-        -- 当输入接近 ±1 时，asin 会不可区分，clamp 在 ±π/2
-        pitch = math.pi/2 * (sinp < 0 and -1 or 1)
+end
+
+function axis_transfer(quat,mapping)
+    if mapping == "xzy" then
+        return {
+            x = quat.x,
+            y = quat.z,
+            z = quat.y,
+            w = quat.w
+        }
+    elseif mapping == "zxy" then
+    return {
+            x = quat.z,
+            y = quat.x,
+            z = quat.y,
+            w = quat.w
+        }
     else
-        pitch = math.asin(sinp)
+        return quat
     end
+end
 
+function quaternionError(q_current, q_target)
+
+    local error = {
+        w = q_target.w*q_current.w + q_target.x*q_current.x + 
+            q_target.y*q_current.y + q_target.z*q_current.z,
+        x = q_target.w*q_current.x - q_target.x*q_current.w - 
+            q_target.y*q_current.z + q_target.z*q_current.y,
+        y = q_target.w*q_current.y + q_target.x*q_current.z - 
+            q_target.y*q_current.w - q_target.z*q_current.x,
+        z = q_target.w*q_current.z - q_target.x*q_current.y + 
+            q_target.y*q_current.x - q_target.z*q_current.w
+    }
+    if error.w < 0 then
+        error.w = -error.w
+        error.x = -error.x
+        error.y = -error.y
+        error.z = -error.z
+    end
+    
+    return error
+end
+
+function quaternionErrorToVector(q_error)
+    -- 计算旋转角度
+    local angle = 2.0 * math.acos(math.clamp(q_error.w, -1, 1))
+    
+    -- 计算旋转轴长度
+    local axis_len = math.sqrt(q_error.x*q_error.x + q_error.y*q_error.y + q_error.z*q_error.z)
+    
+    if axis_len > 1e-6 then
+        -- 角误差 = 角度 × 旋转轴
+        local scale = angle / axis_len
+        return {
+            x = q_error.x * scale,
+            y = q_error.y * scale,
+            z = q_error.z * scale
+        }
+    else
+        return {x = 0, y = 0, z = 0}
+    end
+end
+
+function quaternionToEuler(quat)
+    local w, x, y, z = quat.w, quat.x, quat.y, quat.z
+    
+    -- 偏航 (yaw) - 绕Z轴
     local siny_cosp = 2 * (w * z + x * y)
     local cosy_cosp = 1 - 2 * (y * y + z * z)
     local yaw = math.atan2(siny_cosp, cosy_cosp)
-
+    
+    -- 俯仰 (pitch) - 绕Y轴
+    local sinp = 2 * (w * y - z * x)
+    local pitch
+    
+    -- 处理奇异点（俯仰接近±90°）
+    if math.abs(sinp) >= 1 then
+        pitch = math.copysign(math.pi / 2, sinp)
+    else
+        pitch = math.asin(sinp)
+    end
+    
+    -- 滚转 (roll) - 绕X轴
+    local sinr_cosp = 2 * (w * x + y * z)
+    local cosr_cosp = 1 - 2 * (x * x + y * y)
+    local roll = math.atan2(sinr_cosp, cosr_cosp)
     return { roll = roll, pitch = pitch, yaw = yaw }
 end
 
@@ -281,9 +384,18 @@ function euler_correct(euler,offset_r,offset_p,offset_y)
 end
 
 local Pos_X = -332
-local Pos_Y = -50
+local Pos_Y = -20
 local Pos_Z = 77
 local old_omega = {}
+local axis_offset = {x=0, y=1, z=0}  -- Y轴
+local angle_offset = math.rad(45)     -- 45度转弧度
+
+target_quat = {
+    x = 0,
+    y = 0,
+    z = 0,
+    w = 1
+}
 while true do
     --Self_Check()
     local matrix = ship.getTransformationMatrix()
@@ -300,23 +412,25 @@ while true do
     local pr = TF_R(yaw_Angle,px,pz)
     local vp = TF_P(yaw_Angle,vel.x,vel.z)
     local vr = TF_R(yaw_Angle,vel.x,vel.z)
-    local euler = euler_correct(quaternionToEuler(ship.getQuaternion()),0,0,0)
-    local loit = normalize(math.sqrt(mass/0.1/pro_n),0,2048)    
-    alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y*0.01
+    --local euler = quaternionErrorToVector(quaternionError(quaternionToEuler(axis_transfer(ship.getQuaternion(),"xzy")),target_quat))
+    local euler = quaternionErrorToVector(quaternionError(ship.getQuaternion(), target_quat))
+    local loit = normalize(math.sqrt(mass/0.15/pro_n),0,2048)    
+    alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y *0.02
     --pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01
     --rol = PID_Calc(PID_Calc(PID_Calc(pp,vr,spd),roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
-    yaw = PID_Calc(PID_Calc(0,yaw_Angle,yaw_ang),omega.y,yaw_rat)
-    pit = PID_Calc(PID_Calc(0,pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01  --线性阻力模拟
-    rol = PID_Calc(PID_Calc(0,roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
-    M1 = alt - pit - rol + yaw + loit
-    M2 = alt + pit + rol + yaw + loit
-    M3 = alt - pit + rol - yaw + loit
-    M4 = alt + pit - rol - yaw + loit
+    yaw = PID_Calc(PID_Calc_error(euler.y,yaw_ang),omega.y,yaw_rat)
+    pit = PID_Calc(PID_Calc_error(euler.z,att_ang),omega.z,att_rat) - omega.z * 0.02--线性阻力模拟
+    rol = PID_Calc(PID_Calc_error(euler.x,att_ang),-omega.x,att_rat) - omega.x * 0.02
+    --loit  = 0
+    M1 = alt - pit + rol + yaw + loit
+    M2 = alt + pit - rol + yaw + loit
+    M3 = alt - pit - rol - yaw + loit
+    M4 = alt + pit + rol - yaw + loit
 
     --print(rot.x, rot.y, rot.z, rot.w)
-    --M1,M2,M3,M4 = 0,0.0,0.0,0.1
+    --M1,M2,M3,M4 = -1,-1,-1,-1
     --print(pit)
-    print(euler.roll, euler.pitch)
+    print(PID_Calc_error(euler.x,att_ang))
 
     Motor_Set()
 end
