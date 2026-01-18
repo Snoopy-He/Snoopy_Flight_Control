@@ -64,7 +64,7 @@ local alt_spd = {
 }
 
 local yaw_ang = {
-    kp = 0.05,
+    kp = 0.1,
     ki = 0,
     kd = 0,
     error = 0,
@@ -75,9 +75,9 @@ local yaw_ang = {
 }
 
 local yaw_rat = {
-    kp = 0.05,
+    kp = 2.0,
     ki = 0.00,
-    kd = 0.001,
+    kd = 0.2,
     error = 0,
     err_all = 0,
     last_err = 0,
@@ -107,8 +107,8 @@ local spd = {
     output_max = 45
 }
 
-local att_ang = {
-    kp = 0.5,
+local pit_ang = {
+    kp = 0.4,
     ki = 0.0,
     kd = 0,
     error = 0,
@@ -118,10 +118,32 @@ local att_ang = {
     output_max = 256
 }
 
-local att_rat = {
-    kp = 0.02,
+local pit_rat = {
+    kp = 1.5,
     ki = 0,
-    kd = 0.1,
+    kd = 0.0,
+    error = 0,
+    err_all = 0,
+    last_err = 0,
+    errall_max = 10000,
+    output_max = 1
+}
+
+local rol_ang = {
+    kp = 0.4,
+    ki = 0.01,
+    kd = 0,
+    error = 0,
+    err_all = 0,
+    last_err = 0,
+    errall_max = 10000,
+    output_max = 256
+}
+
+local rol_rat = {
+    kp = 1.5,
+    ki = 0.0,
+    kd = 0.01,
     error = 0,
     err_all = 0,
     last_err = 0,
@@ -383,6 +405,37 @@ function euler_correct(euler,offset_r,offset_p,offset_y)
     }
 end
 
+function vector(error,omega)
+    return {
+        error.x,
+        error.y,
+        error.z,
+        omega.x,
+        omega.y,
+        omega.z
+    }
+end
+
+local K = {
+    {0.0010, 0.0000, -0.0000, 1.4788, 0.0000, -0.0000},
+    {-0.0000, 0.0010, 0.0000, -0.0000, 1.4788, -0.0000},
+    {-0.0000, 0.0000, 0.0010, -0.0000, 0.0000, 1.4788}
+}
+
+function LQR_Calc(x,k)
+    local tau = {0,0,0}
+    for i=1,3 do
+        for j=1,6 do
+            tau[i] = tau[i] - k[i][j] * x[j]
+        end
+    end
+    return {
+        x = tau[1],
+        y = tau[2],
+        z = tau[3]
+    }
+end
+
 local Pos_X = -332
 local Pos_Y = -20
 local Pos_Z = 77
@@ -418,19 +471,33 @@ while true do
     alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y *0.02
     --pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01
     --rol = PID_Calc(PID_Calc(PID_Calc(pp,vr,spd),roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
-    yaw = PID_Calc(PID_Calc_error(euler.y,yaw_ang),omega.y,yaw_rat)
-    pit = PID_Calc(PID_Calc_error(euler.z,att_ang),omega.z,att_rat) - omega.z * 0.02--线性阻力模拟
-    rol = PID_Calc(PID_Calc_error(euler.x,att_ang),-omega.x,att_rat) - omega.x * 0.02
-    --loit  = 0
-    M1 = alt - pit + rol + yaw + loit
-    M2 = alt + pit - rol + yaw + loit
-    M3 = alt - pit - rol - yaw + loit
-    M4 = alt + pit + rol - yaw + loit
+    --yaw = PID_Calc(PID_Calc_error(euler.y,yaw_ang),omega.y,yaw_rat)
+    --pit = PID_Calc(PID_Calc_error(euler.z,pit_ang),-omega.z,pit_rat)
+    --rol = PID_Calc(PID_Calc_error(euler.x,rol_ang),-omega.x,rol_rat)
+    local Tau = LQR_Calc(vector(euler,omega),K)
+    --M1 = alt - pit + rol + yaw + loit
+    --M2 = alt + pit - rol + yaw + loit
+    --M3 = alt - pit - rol - yaw + loit
+    --M4 = alt + pit + rol - yaw + loit
+    M1 = alt  + (- Tau.x - Tau.z + Tau.y )/20+ loit
+    M2 = alt + (Tau.x + Tau.z + Tau.y)/20 + loit
+    M3 = alt + (- Tau.x + Tau.z - Tau.y)/20 + loit
+    M4 = alt + (Tau.x - Tau.z - Tau.y)/20 + loit
 
     --print(rot.x, rot.y, rot.z, rot.w)
     --M1,M2,M3,M4 = -1,-1,-1,-1
     --print(pit)
-    print(PID_Calc_error(euler.x,att_ang))
+    --print(PID_Calc_error(euler.x,att_ang))
+
+
+    local tensor = ship.getMomentOfInertiaTensor()
+    local quat = ship.getQuaternion()
+    print(Tau.y)
+    --print("Moment of Inertia Tensor")
+    --for i=1,3,1 do
+        --print(textutils.serialize(tensor[i]))
+    --end
+
 
     Motor_Set()
 end
