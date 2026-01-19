@@ -465,6 +465,7 @@ while true do
     local pr = TF_R(yaw_Angle,px,pz)
     local vp = TF_P(yaw_Angle,vel.x,vel.z)
     local vr = TF_R(yaw_Angle,vel.x,vel.z)
+    --local euler = quaternionToEuler(ship.getQuaternion())
     --local euler = quaternionErrorToVector(quaternionError(quaternionToEuler(axis_transfer(ship.getQuaternion(),"xzy")),target_quat))
     local euler = quaternionErrorToVector(quaternionError(ship.getQuaternion(), target_quat))
     local loit = normalize(math.sqrt(mass/0.15/pro_n),0,2048)    
@@ -474,15 +475,15 @@ while true do
     --yaw = PID_Calc(PID_Calc_error(euler.y,yaw_ang),omega.y,yaw_rat)
     --pit = PID_Calc(PID_Calc_error(euler.z,pit_ang),-omega.z,pit_rat)
     --rol = PID_Calc(PID_Calc_error(euler.x,rol_ang),-omega.x,rol_rat)
-    local Tau = LQR_Calc(vector(euler,omega),K)
+    --local Tau = LQR_Calc(vector(euler,omega),K)
     --M1 = alt - pit + rol + yaw + loit
     --M2 = alt + pit - rol + yaw + loit
     --M3 = alt - pit - rol - yaw + loit
     --M4 = alt + pit + rol - yaw + loit
-    M1 = alt  + (- Tau.x - Tau.z + Tau.y )/20+ loit
-    M2 = alt + (Tau.x + Tau.z + Tau.y)/20 + loit
-    M3 = alt + (- Tau.x + Tau.z - Tau.y)/20 + loit
-    M4 = alt + (Tau.x - Tau.z - Tau.y)/20 + loit
+    --M1 = alt  + (- Tau.x - Tau.z + Tau.y )/20+ loit
+    --M2 = alt + (Tau.x + Tau.z + Tau.y)/20 + loit
+    --M3 = alt + (- Tau.x + Tau.z - Tau.y)/20 + loit
+    --M4 = alt + (Tau.x - Tau.z - Tau.y)/20 + loit
 
     --print(rot.x, rot.y, rot.z, rot.w)
     --M1,M2,M3,M4 = -1,-1,-1,-1
@@ -492,7 +493,8 @@ while true do
 
     local tensor = ship.getMomentOfInertiaTensor()
     local quat = ship.getQuaternion()
-    print(Tau.y)
+    --print(euler.roll, euler.pitch, euler.yaw)
+    print(quat.w,quat.x,quat.y, quat.z)
     --print("Moment of Inertia Tensor")
     --for i=1,3,1 do
         --print(textutils.serialize(tensor[i]))
