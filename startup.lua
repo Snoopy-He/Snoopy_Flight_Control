@@ -75,7 +75,7 @@ local yaw_ang = {
 }
 
 local yaw_rat = {
-    kp = 2.0,
+    kp = 0.5,
     ki = 0.00,
     kd = 0.2,
     error = 0,
@@ -119,7 +119,7 @@ local pit_ang = {
 }
 
 local pit_rat = {
-    kp = 1.5,
+    kp = 0.7,
     ki = 0,
     kd = 0.0,
     error = 0,
@@ -131,7 +131,7 @@ local pit_rat = {
 
 local rol_ang = {
     kp = 0.4,
-    ki = 0.01,
+    ki = 0.0,
     kd = 0,
     error = 0,
     err_all = 0,
@@ -141,9 +141,9 @@ local rol_ang = {
 }
 
 local rol_rat = {
-    kp = 1.5,
+    kp = 0.7,
     ki = 0.0,
-    kd = 0.01,
+    kd = 0.00,
     error = 0,
     err_all = 0,
     last_err = 0,
@@ -320,24 +320,30 @@ function axis_transfer(quat,mapping)
 end
 
 function quaternionError(q_current, q_target)
-
-    local error = {
-        w = q_target.w*q_current.w + q_target.x*q_current.x + 
-            q_target.y*q_current.y + q_target.z*q_current.z,
-        x = q_target.w*q_current.x - q_target.x*q_current.w - 
-            q_target.y*q_current.z + q_target.z*q_current.y,
-        y = q_target.w*q_current.y + q_target.x*q_current.z - 
-            q_target.y*q_current.w - q_target.z*q_current.x,
-        z = q_target.w*q_current.z - q_target.x*q_current.y + 
-            q_target.y*q_current.x - q_target.z*q_current.w
+    -- 当前姿态的逆（共轭）
+    local qc = {
+        w =  q_current.w,
+        x = -q_current.x,
+        y = -q_current.y,
+        z = -q_current.z
     }
+
+    -- q_err = q_target ⊗ qc
+    local error = {
+        w = q_target.w*qc.w - q_target.x*qc.x - q_target.y*qc.y - q_target.z*qc.z,
+        x = q_target.w*qc.x + q_target.x*qc.w + q_target.y*qc.z - q_target.z*qc.y,
+        y = q_target.w*qc.y - q_target.x*qc.z + q_target.y*qc.w + q_target.z*qc.x,
+        z = q_target.w*qc.z + q_target.x*qc.y - q_target.y*qc.x + q_target.z*qc.w
+    }
+
+    -- 保证最短旋转
     if error.w < 0 then
         error.w = -error.w
         error.x = -error.x
         error.y = -error.y
         error.z = -error.z
     end
-    
+
     return error
 end
 
@@ -364,13 +370,21 @@ end
 function quaternionToEuler(quat)
     local w, x, y, z = quat.w, quat.x, quat.y, quat.z
     
-    -- 偏航 (yaw) - 绕Z轴
-    local siny_cosp = 2 * (w * z + x * y)
-    local cosy_cosp = 1 - 2 * (y * y + z * z)
+    -- 旋转顺序：X-Y-Z（滚转-偏航-俯仰）
+    -- 对应欧拉角顺序：先绕X轴(roll)，再绕Y轴(yaw)，最后绕Z轴(pitch)
+    
+    -- 1. 滚转 (roll) - 绕X轴
+    local sinr_cosp = 2 * (w * x + y * z)
+    local cosr_cosp = 1 - 2 * (x * x + y * y)
+    local roll = math.atan2(sinr_cosp, cosr_cosp)
+    
+    -- 2. 偏航 (yaw) - 绕Y轴
+    local siny_cosp = 2 * (w * y - z * x)
+    local cosy_cosp = 1 - 2 * (x * x + z * z)
     local yaw = math.atan2(siny_cosp, cosy_cosp)
     
-    -- 俯仰 (pitch) - 绕Y轴
-    local sinp = 2 * (w * y - z * x)
+    -- 3. 俯仰 (pitch) - 绕Z轴
+    local sinp = 2 * (w * z + x * y)
     local pitch
     
     -- 处理奇异点（俯仰接近±90°）
@@ -380,10 +394,6 @@ function quaternionToEuler(quat)
         pitch = math.asin(sinp)
     end
     
-    -- 滚转 (roll) - 绕X轴
-    local sinr_cosp = 2 * (w * x + y * z)
-    local cosr_cosp = 1 - 2 * (x * x + y * y)
-    local roll = math.atan2(sinr_cosp, cosr_cosp)
     return { roll = roll, pitch = pitch, yaw = yaw }
 end
 
@@ -395,14 +405,6 @@ function angle_correct(angle,offset)
         corrected_angle = corrected_angle + 2 * pi
     end
     return corrected_angle
-end
-
-function euler_correct(euler,offset_r,offset_p,offset_y)
-    return {
-        roll = angle_correct(euler.roll, offset_r),
-        pitch = -angle_correct(euler.yaw, offset_p),
-        yaw = angle_correct(euler.pitch, offset_y),
-    }
 end
 
 function vector(error,omega)
@@ -436,6 +438,26 @@ function LQR_Calc(x,k)
     }
 end
 
+function quat.vecRot(q, v)
+    local x = q.x * 2
+    local y = q.y * 2
+    local z = q.z * 2
+    local xx = q.x * x
+    local yy = q.y * y
+    local zz = q.z * z
+    local xy = q.x * y
+    local xz = q.x * z
+    local yz = q.y * z
+    local wx = q.w * x
+    local wy = q.w * y
+    local wz = q.w * z
+    local res = {}
+    res.x = (1.0 - (yy + zz)) * v.x + (xy - wz) * v.y + (xz + wy) * v.z
+    res.y = (xy + wz) * v.x + (1.0 - (xx + zz)) * v.y + (yz - wx) * v.z
+    res.z = (xz - wy) * v.x + (yz + wx) * v.y + (1.0 - (xx + yy)) * v.z
+    return newVec(res.x, res.y, res.z)
+end
+
 local Pos_X = -332
 local Pos_Y = -20
 local Pos_Z = 77
@@ -452,11 +474,21 @@ target_quat = {
 while true do
     --Self_Check()
     local matrix = ship.getTransformationMatrix()
+
+    local R00, R01, R02 = matrix[1][1], matrix[1][2], matrix[1][3]
+    local R10, R11, R12 = matrix[2][1], matrix[2][2], matrix[2][3]
+    local R20, R21, R22 = matrix[3][1], matrix[3][2], matrix[3][3]
+
+    local yaw   = math.atan2(R10, R00)
+    local pitch = math.asin(-R20)
+    local roll  = math.atan2(R21, R22)
+
     local yaw_Angle = ship.getYaw()
     local pitch_Angle = ship.getPitch()
     local roll_Angle = ship.getRoll()
     local pos = ship.getWorldspacePosition()
-    local omega = true_data_fliter(WorldToBody(ship.getOmega(), matrix),old_omega)
+    --local omega = true_data_fliter(WorldToBody(ship.getOmega(), matrix),old_omega)
+    local omega = ship.getOmega()
     local mass = ship.getMass()
     local vel = ship.getVelocity()
     local px = PID_Calc(Pos_X,pos.x,pos_p)
@@ -465,21 +497,23 @@ while true do
     local pr = TF_R(yaw_Angle,px,pz)
     local vp = TF_P(yaw_Angle,vel.x,vel.z)
     local vr = TF_R(yaw_Angle,vel.x,vel.z)
-    --local euler = quaternionToEuler(ship.getQuaternion())
-    --local euler = quaternionErrorToVector(quaternionError(quaternionToEuler(axis_transfer(ship.getQuaternion(),"xzy")),target_quat))
-    local euler = quaternionErrorToVector(quaternionError(ship.getQuaternion(), target_quat))
+    local euler = quaternionToEuler(ship.getQuaternion())
+    local error = quaternionErrorToVector(quaternionError(ship.getQuaternion(), target_quat))
+    --print(error.x,error.z)
+    error.x, error.z = yaw_TF(yaw_Angle,error.x,error.z)
     local loit = normalize(math.sqrt(mass/0.15/pro_n),0,2048)    
-    alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y *0.02
+    --alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y *0.02
     --pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01
     --rol = PID_Calc(PID_Calc(PID_Calc(pp,vr,spd),roll_Angle,att_ang),omega.z,att_rat)-omega.z*0.01
     --yaw = PID_Calc(PID_Calc_error(euler.y,yaw_ang),omega.y,yaw_rat)
-    --pit = PID_Calc(PID_Calc_error(euler.z,pit_ang),-omega.z,pit_rat)
-    --rol = PID_Calc(PID_Calc_error(euler.x,rol_ang),-omega.x,rol_rat)
+    --pit = PID_Calc(PID_Calc_error(euler.z,pit_ang),omega.z,pit_rat)
+    --rol = PID_Calc(PID_Calc_error(euler.x,rol_ang),omega.x,rol_rat)
     --local Tau = LQR_Calc(vector(euler,omega),K)
-    --M1 = alt - pit + rol + yaw + loit
-    --M2 = alt + pit - rol + yaw + loit
-    --M3 = alt - pit - rol - yaw + loit
-    --M4 = alt + pit + rol - yaw + loit
+    loit = 0
+    M1 = alt - pit - rol + yaw + loit
+    M2 = alt + pit + rol + yaw + loit
+    M3 = alt - pit + rol - yaw + loit
+    M4 = alt + pit - rol - yaw + loit
     --M1 = alt  + (- Tau.x - Tau.z + Tau.y )/20+ loit
     --M2 = alt + (Tau.x + Tau.z + Tau.y)/20 + loit
     --M3 = alt + (- Tau.x + Tau.z - Tau.y)/20 + loit
@@ -493,13 +527,15 @@ while true do
 
     local tensor = ship.getMomentOfInertiaTensor()
     local quat = ship.getQuaternion()
-    --print(euler.roll, euler.pitch, euler.yaw)
-    print(quat.w,quat.x,quat.y, quat.z)
+    --print(euler.x, euler.z)
+    print(quat.z,quat.x)
+    --print(quat.w,quat.y)
     --print("Moment of Inertia Tensor")
     --for i=1,3,1 do
         --print(textutils.serialize(tensor[i]))
     --end
 
+    --print(yaw, pitch, roll)
 
     Motor_Set()
 end
