@@ -374,25 +374,18 @@ function quaternionToEuler(quat)
     -- 对应欧拉角顺序：先绕X轴(roll)，再绕Y轴(yaw)，最后绕Z轴(pitch)
     
     -- 1. 滚转 (roll) - 绕X轴
-    local sinr_cosp = 2 * (w * x + y * z)
-    local cosr_cosp = 1 - 2 * (x * x + y * y)
+    local sinr_cosp = 2 * (w * x - y * z)
+    local cosr_cosp = w*w +z*z - x*x - y*y
     local roll = math.atan2(sinr_cosp, cosr_cosp)
     
     -- 2. 偏航 (yaw) - 绕Y轴
-    local siny_cosp = 2 * (w * y - z * x)
-    local cosy_cosp = 1 - 2 * (x * x + z * z)
-    local yaw = math.atan2(siny_cosp, cosy_cosp)
+    local siny = 2 * (w * y + x * z)
+    local yaw = math.atan2(siny, math.sqrt(1 - siny * siny))
     
     -- 3. 俯仰 (pitch) - 绕Z轴
-    local sinp = 2 * (w * z + x * y)
-    local pitch
-    
-    -- 处理奇异点（俯仰接近±90°）
-    if math.abs(sinp) >= 1 then
-        pitch = math.copysign(math.pi / 2, sinp)
-    else
-        pitch = math.asin(sinp)
-    end
+    local sinp_cosp = 2 * (w * z - x * y)
+    local cosp_cosp = w*w + x*x - y*y - z*z
+    local pitch = math.atan2(sinp_cosp, cosp_cosp)
     
     return { roll = roll, pitch = pitch, yaw = yaw }
 end
@@ -438,25 +431,6 @@ function LQR_Calc(x,k)
     }
 end
 
-function quat.vecRot(q, v)
-    local x = q.x * 2
-    local y = q.y * 2
-    local z = q.z * 2
-    local xx = q.x * x
-    local yy = q.y * y
-    local zz = q.z * z
-    local xy = q.x * y
-    local xz = q.x * z
-    local yz = q.y * z
-    local wx = q.w * x
-    local wy = q.w * y
-    local wz = q.w * z
-    local res = {}
-    res.x = (1.0 - (yy + zz)) * v.x + (xy - wz) * v.y + (xz + wy) * v.z
-    res.y = (xy + wz) * v.x + (1.0 - (xx + zz)) * v.y + (yz - wx) * v.z
-    res.z = (xz - wy) * v.x + (yz + wx) * v.y + (1.0 - (xx + yy)) * v.z
-    return newVec(res.x, res.y, res.z)
-end
 
 local Pos_X = -332
 local Pos_Y = -20
@@ -500,7 +474,7 @@ while true do
     local euler = quaternionToEuler(ship.getQuaternion())
     local error = quaternionErrorToVector(quaternionError(ship.getQuaternion(), target_quat))
     --print(error.x,error.z)
-    error.x, error.z = yaw_TF(yaw_Angle,error.x,error.z)
+    --error.x, error.z = yaw_TF(yaw_Angle,error.x,error.z)
     local loit = normalize(math.sqrt(mass/0.15/pro_n),0,2048)    
     --alt = PID_Calc(PID_Calc(Pos_Y,pos.y,alt_pos),vel.y,alt_spd) - vel.y *0.02
     --pit = PID_Calc(PID_Calc(PID_Calc(pp,vp,spd),pitch_Angle,att_ang),omega.x,att_rat)-omega.x*0.01
@@ -528,14 +502,14 @@ while true do
     local tensor = ship.getMomentOfInertiaTensor()
     local quat = ship.getQuaternion()
     --print(euler.x, euler.z)
-    print(quat.z,quat.x)
+    --print(quat.z,quat.x)
     --print(quat.w,quat.y)
     --print("Moment of Inertia Tensor")
     --for i=1,3,1 do
         --print(textutils.serialize(tensor[i]))
     --end
 
-    --print(yaw, pitch, roll)
+    print(euler.pitch, euler.roll)
 
     Motor_Set()
 end
